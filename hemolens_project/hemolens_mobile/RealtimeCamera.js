@@ -8,10 +8,10 @@ import {
   Alert,
   Dimensions,
 } from 'react-native';
-import { CameraView } from 'expo-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import axios from 'axios';
 
-const API_BASE_URL = 'http://172.16.44.76:8000';
+const API_BASE_URL = 'https://hemolens-project-0pyv.onrender.com';
 const CAPTURE_INTERVAL = 1500; // Capture every 1.5 seconds
 const MAX_HISTORY = 5; // Keep last 5 predictions for rolling average
 
@@ -23,19 +23,20 @@ export default function RealtimeCamera({ onClose }) {
   const [averageHemoglobin, setAverageHemoglobin] = useState(null);
   const [frameCount, setFrameCount] = useState(0);
   const captureIntervalRef = useRef(null);
-  const [permission, setPermission] = useState(null);
 
-  // Request camera permission
+  // Use camera permissions hook
+  const [permission, requestPermission] = useCameraPermissions();
+
+  // Request camera permission on mount
   useEffect(() => {
-    (async () => {
-      const { status } = await CameraView.requestCameraPermissionsAsync();
-      setPermission(status === 'granted');
-    })();
-  }, []);
+    if (!permission) {
+      requestPermission();
+    }
+  }, [permission, requestPermission]);
 
   // Start periodic frame capture
   useEffect(() => {
-    if (isCameraReady && permission) {
+    if (isCameraReady && permission?.granted) {
       captureIntervalRef.current = setInterval(captureFrame, CAPTURE_INTERVAL);
       return () => clearInterval(captureIntervalRef.current);
     }
@@ -87,11 +88,19 @@ export default function RealtimeCamera({ onClose }) {
         timeout: 30000,
       });
 
+      // Check if eyes were detected
+      if (response.data.status === 'no_eyes_detected') {
+        console.log('No eyes detected:', response.data.message);
+        return;
+      }
+
       if (response.data && response.data.hemoglobin_estimate !== undefined) {
         const newPrediction = {
           hemoglobin: response.data.hemoglobin_estimate,
           timestamp: new Date().toLocaleTimeString(),
-          confidence: response.data.confidence || 0.5,
+          health_status: response.data.health_status,
+          health_message: response.data.health_message,
+          health_color: response.data.health_color,
         };
 
         setPredictions((prev) => {
@@ -111,7 +120,7 @@ export default function RealtimeCamera({ onClose }) {
     onClose();
   };
 
-  if (permission === null) {
+  if (!permission) {
     return (
       <View style={styles.container}>
         <Text style={styles.centerText}>Requesting camera permission...</Text>
@@ -119,10 +128,13 @@ export default function RealtimeCamera({ onClose }) {
     );
   }
 
-  if (permission === false) {
+  if (!permission.granted) {
     return (
       <View style={styles.container}>
         <Text style={styles.centerText}>Camera permission denied</Text>
+        <Text style={styles.smallText}>
+          Please enable camera access in your device settings
+        </Text>
         <TouchableOpacity
           style={[styles.button, styles.closeButton]}
           onPress={handleStop}
@@ -158,13 +170,23 @@ export default function RealtimeCamera({ onClose }) {
 
         {/* Bottom results */}
         <View style={styles.resultsContainer}>
-          <View style={styles.resultCard}>
+          <View style={[styles.resultCard, predictions.length > 0 && { backgroundColor: predictions[0].health_color ? predictions[0].health_color + 'E5' : 'rgba(76, 175, 80, 0.9)' }]}>
             {averageHemoglobin !== null ? (
               <>
                 <Text style={styles.resultLabel}>Hemoglobin Level</Text>
                 <Text style={styles.resultValue}>
                   {averageHemoglobin.toFixed(2)} g/dL
                 </Text>
+                {predictions.length > 0 && (
+                  <>
+                    <Text style={styles.healthStatus}>
+                      {predictions[0].health_status}
+                    </Text>
+                    <Text style={styles.healthMessage}>
+                      {predictions[0].health_message}
+                    </Text>
+                  </>
+                )}
                 <Text style={styles.dataPointsText}>
                   ({predictions.length} measurements)
                 </Text>
@@ -223,6 +245,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   camera: {
     flex: 1,
@@ -292,6 +316,17 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     color: '#FFF',
+  },
+  healthStatus: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFF',
+    marginTop: 8,
+  },
+  healthMessage: {
+    fontSize: 12,
+    color: '#FFF',
+    marginTop: 6,
   },
   dataPointsText: {
     fontSize: 10,
@@ -373,5 +408,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#FFF',
     textAlign: 'center',
+  },
+  smallText: {
+    fontSize: 12,
+    color: '#AAA',
+    textAlign: 'center',
+    marginTop: 10,
+    marginBottom: 30,
   },
 });
